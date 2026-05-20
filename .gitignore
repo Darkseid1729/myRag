@@ -1,2 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.venv/
+venv/
+env/
+
+# MyRAG runtime data
+data/
+models/
+*.db
+
+# Environment
+.env
+.env.local
+
+# Prompts (private)
 prompt.txt
 prompt2.txt
+
+# Node
+node_modules/
+parser_bridge/node_modules/
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+*.xml
+
+# IDE
+.vscode/
+.idea/
+*.suo
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db

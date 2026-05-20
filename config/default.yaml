@@ -1,0 +1,38 @@
+app:
+  host: "127.0.0.1"
+  port: 8000
+  workers: 1
+
+memory:
+  sqlite_page_cache_kb: 4096   # 4 MB page cache cap
+  vector_lru_cache_kb: 1024    # 1 MB LRU for dequantized vectors
+  graph_bfs_frontier: 512      # max BFS queue size (nodes)
+  max_working_set_kb: 1024     # active query buffers
+
+embedding:
+  model: "all-MiniLM-L6-v2"
+  dims: 384
+  quantize: true               # store as int8, not float32
+  batch_size: 16
+
+indexer:
+  max_chunk_tokens: 300
+  min_chunk_tokens: 20
+  overlap_tokens: 30
+  file_extensions: [".js", ".jsx", ".ts", ".tsx"]
+  exclude_dirs: ["node_modules", ".git", "dist", "build", ".next", "coverage"]
+
+retrieval:
+  default_top_k: 10
+  fts_candidate_pool: 50       # pull top-50 via FTS then rerank
+  max_graph_depth: 4
+  cache_ttl_seconds: 3600
+
+llm:
+  provider: "none"             # none | ollama | llamacpp | openai
+  max_context_tokens: 4096
+  temperature: 0.2
+
+logging:
+  level: "INFO"
+  format: "rich"
