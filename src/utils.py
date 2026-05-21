@@ -12,18 +12,38 @@ from typing import Any, Callable
 import psutil
 from rich.logging import RichHandler
 
-
 # ---------------------------------------------------------------------------
-# Logger
+# Logger — initialised once at module level
 # ---------------------------------------------------------------------------
 
-def get_logger(name: str) -> logging.Logger:
+_LOG_INITIALISED = False
+
+
+def setup_logging(level: int = logging.INFO) -> None:
+    """Configure rich logging once.  Safe to call multiple times."""
+    global _LOG_INITIALISED
+    if _LOG_INITIALISED:
+        return
+    _LOG_INITIALISED = True
+    # Remove any existing handlers on the root logger to avoid duplicates
+    root = logging.getLogger()
+    root.handlers.clear()
     logging.basicConfig(
-        level=logging.INFO,
+        level=level,
         format="%(message)s",
         datefmt="[%X]",
-        handlers=[RichHandler(rich_tracebacks=True, markup=True)],
+        handlers=[RichHandler(rich_tracebacks=True, markup=True, show_path=False)],
     )
+    root.setLevel(level)
+
+
+# Bootstrap with INFO on import; callers may call setup_logging() again with
+# the configured level once config is available.
+setup_logging(logging.INFO)
+
+
+def get_logger(name: str) -> logging.Logger:
+    """Return a named logger.  ``setup_logging`` must have been called first."""
     return logging.getLogger(name)
 
 
@@ -83,6 +103,14 @@ def truncate_to_tokens(text: str, max_tokens: int) -> str:
     return text[:limit] if len(text) > limit else text
 
 
+def split_camel_case(name: str) -> str:
+    """Convert camelCase/PascalCase to space-separated tokens for FTS5."""
+    import re
+    # Insert space before uppercase letters that follow lowercase
+    s = re.sub(r"([a-z])([A-Z])", r"\1 \2", name)
+    return s.lower()
+
+
 # ---------------------------------------------------------------------------
 # Memory monitor
 # ---------------------------------------------------------------------------
@@ -91,3 +119,10 @@ def current_rss_mb() -> float:
     """Return the current resident set size in megabytes."""
     proc = psutil.Process()
     return proc.memory_info().rss / (1024 * 1024)
+
+
+def log_memory(label: str = "") -> None:
+    """Log current RSS memory usage at DEBUG level."""
+    rss = current_rss_mb()
+    tag = f"[{label}] " if label else ""
+    logger.debug(f"{tag}RSS: {rss:.1f} MB")

@@ -1,0 +1,993 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MyRAG — Local Code Intelligence</title>
+  <meta name="description" content="Memory-efficient local RAG system for Vite+React codebases. Index and query your codebase with lexical, semantic, and graph-aware retrieval." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    /* ──────────────────────────────────────────────────────────
+       Design tokens
+    ────────────────────────────────────────────────────────── */
+    :root {
+      --bg:          #0d0f14;
+      --bg-card:     #131720;
+      --bg-input:    #1a1f2e;
+      --bg-hover:    #1e2535;
+      --border:      #252d3d;
+      --border-focus:#4f7fff;
+      --accent:      #4f7fff;
+      --accent-dim:  rgba(79,127,255,0.15);
+      --accent2:     #7c5cf7;
+      --green:       #22c55e;
+      --amber:       #f59e0b;
+      --red:         #ef4444;
+      --cyan:        #06b6d4;
+      --text:        #e2e8f0;
+      --text-muted:  #64748b;
+      --text-dim:    #94a3b8;
+      --radius:      10px;
+      --radius-sm:   6px;
+      --shadow:      0 4px 24px rgba(0,0,0,0.5);
+      --font:        'Inter', system-ui, sans-serif;
+      --mono:        'JetBrains Mono', 'Fira Code', monospace;
+    }
+
+    /* ──────────────────────────────────────────────────────────
+       Reset & base
+    ────────────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { height: 100%; scroll-behavior: smooth; }
+
+    body {
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 14px;
+      line-height: 1.6;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ──────────────────────────────────────────────────────────
+       Layout
+    ────────────────────────────────────────────────────────── */
+    .app {
+      display: grid;
+      grid-template-columns: 280px 1fr;
+      grid-template-rows: 56px 1fr;
+      grid-template-areas: "header header" "sidebar main";
+      min-height: 100vh;
+    }
+
+    /* ──────────────────────────────────────────────────────────
+       Header
+    ────────────────────────────────────────────────────────── */
+    .header {
+      grid-area: header;
+      display: flex;
+      align-items: center;
+      padding: 0 24px;
+      background: var(--bg-card);
+      border-bottom: 1px solid var(--border);
+      gap: 16px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+      color: var(--text);
+      text-decoration: none;
+    }
+    .logo-icon {
+      width: 30px; height: 30px;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 16px;
+    }
+
+    .header-sep { flex: 1; }
+
+    .status-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--text-muted);
+      transition: background 0.3s;
+    }
+    .status-dot.ok   { background: var(--green); box-shadow: 0 0 8px var(--green); }
+    .status-dot.err  { background: var(--red);   box-shadow: 0 0 8px var(--red); }
+
+    .stat-badge {
+      display: flex; align-items: center; gap: 6px;
+      padding: 4px 12px;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      font-size: 12px;
+      color: var(--text-dim);
+    }
+    .stat-value { color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; }
+
+    /* ──────────────────────────────────────────────────────────
+       Sidebar
+    ────────────────────────────────────────────────────────── */
+    .sidebar {
+      grid-area: sidebar;
+      background: var(--bg-card);
+      border-right: 1px solid var(--border);
+      padding: 20px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+      overflow-y: auto;
+    }
+
+    .sidebar-section { display: flex; flex-direction: column; gap: 8px; }
+    .sidebar-label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-muted);
+      padding: 0 4px;
+    }
+
+    /* ──────────────────────────────────────────────────────────
+       Form controls
+    ────────────────────────────────────────────────────────── */
+    input, textarea, select {
+      width: 100%;
+      padding: 9px 12px;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 13px;
+      outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    input:focus, textarea:focus, select:focus {
+      border-color: var(--border-focus);
+      box-shadow: 0 0 0 3px var(--accent-dim);
+    }
+    input::placeholder, textarea::placeholder { color: var(--text-muted); }
+
+    textarea { resize: vertical; min-height: 80px; font-family: var(--font); }
+
+    label { font-size: 12px; color: var(--text-dim); margin-bottom: 4px; display: block; }
+
+    /* ──────────────────────────────────────────────────────────
+       Buttons
+    ────────────────────────────────────────────────────────── */
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+      padding: 8px 16px;
+      border: none; border-radius: var(--radius-sm);
+      font-family: var(--font); font-size: 13px; font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s;
+      white-space: nowrap;
+    }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .btn-primary {
+      background: var(--accent);
+      color: #fff;
+    }
+    .btn-primary:hover:not(:disabled) {
+      background: #6b8fff;
+      box-shadow: 0 2px 12px rgba(79,127,255,0.4);
+      transform: translateY(-1px);
+    }
+    .btn-secondary {
+      background: var(--bg-hover);
+      color: var(--text-dim);
+      border: 1px solid var(--border);
+    }
+    .btn-secondary:hover:not(:disabled) {
+      background: var(--bg-input);
+      color: var(--text);
+      border-color: var(--border-focus);
+    }
+    .btn-danger {
+      background: rgba(239,68,68,0.15);
+      color: var(--red);
+      border: 1px solid rgba(239,68,68,0.3);
+    }
+    .btn-danger:hover:not(:disabled) {
+      background: rgba(239,68,68,0.25);
+    }
+    .btn-sm { padding: 5px 10px; font-size: 12px; }
+    .btn-full { width: 100%; }
+
+    /* ──────────────────────────────────────────────────────────
+       Main content area
+    ────────────────────────────────────────────────────────── */
+    .main {
+      grid-area: main;
+      padding: 24px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    /* ──────────────────────────────────────────────────────────
+       Search bar
+    ────────────────────────────────────────────────────────── */
+    .search-bar {
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+    }
+    .search-bar textarea {
+      flex: 1;
+      min-height: 64px;
+      font-size: 15px;
+    }
+    .search-controls {
+      display: flex; flex-direction: column; gap: 6px;
+    }
+    .search-row {
+      display: flex; align-items: center; gap: 8px;
+      font-size: 12px; color: var(--text-dim);
+    }
+    .search-row input[type=number] { width: 60px; padding: 5px 8px; }
+
+    /* ──────────────────────────────────────────────────────────
+       Intent badge
+    ────────────────────────────────────────────────────────── */
+    .intent-strip {
+      display: flex; align-items: center; gap: 10px;
+      font-size: 12px; color: var(--text-dim);
+    }
+    .intent-badge {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 3px 10px;
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .intent-symbol_lookup     { background: rgba(6,182,212,0.15);  color: var(--cyan); }
+    .intent-architecture      { background: rgba(124,92,247,0.15); color: #a78bfa; }
+    .intent-modification_guidance { background: rgba(34,197,94,0.15); color: var(--green); }
+    .intent-debugging         { background: rgba(239,68,68,0.15);  color: var(--red); }
+    .intent-rerender_analysis { background: rgba(245,158,11,0.15); color: var(--amber); }
+    .intent-route_tracing     { background: rgba(79,127,255,0.15); color: var(--accent); }
+    .intent-impact_analysis   { background: rgba(239,68,68,0.2);   color: #f87171; }
+
+    .conf-bar {
+      flex: 1; max-width: 100px; height: 4px;
+      background: var(--border);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    .conf-fill { height: 100%; background: var(--accent); border-radius: 2px; transition: width 0.4s; }
+
+    /* ──────────────────────────────────────────────────────────
+       Result cards
+    ────────────────────────────────────────────────────────── */
+    .results-header {
+      display: flex; align-items: center; gap: 12px;
+      font-size: 13px; color: var(--text-muted);
+    }
+    .results-count { font-weight: 600; color: var(--text); }
+    .elapsed { margin-left: auto; font-family: var(--mono); font-size: 11px; }
+
+    .result-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      transition: border-color 0.2s, box-shadow 0.2s;
+      animation: slideIn 0.25s ease forwards;
+    }
+    .result-card:hover {
+      border-color: var(--border-focus);
+      box-shadow: 0 0 0 1px var(--accent-dim), var(--shadow);
+    }
+
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .card-header {
+      display: flex; align-items: center; gap: 10px;
+      padding: 12px 16px;
+      background: var(--bg-hover);
+      border-bottom: 1px solid var(--border);
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .rank-num {
+      width: 24px; height: 24px;
+      background: var(--accent-dim);
+      color: var(--accent);
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 11px; font-weight: 700;
+      flex-shrink: 0;
+    }
+    .file-path {
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--accent);
+      flex: 1; min-width: 0;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .file-path .line-range { color: var(--text-muted); }
+
+    .chunk-type-badge {
+      font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;
+      padding: 2px 7px; border-radius: 4px;
+    }
+    .type-COMPONENT { background: rgba(124,92,247,0.2); color: #a78bfa; }
+    .type-HOOK      { background: rgba(6,182,212,0.2);  color: var(--cyan); }
+    .type-FUNCTION  { background: rgba(34,197,94,0.2);  color: var(--green); }
+    .type-IMPORT_BLOCK { background: rgba(245,158,11,0.2); color: var(--amber); }
+    .type-ROUTE     { background: rgba(79,127,255,0.2); color: var(--accent); }
+    .type-STORE     { background: rgba(239,68,68,0.2);  color: var(--red); }
+    .type-MISC      { background: rgba(100,116,139,0.2); color: var(--text-muted); }
+
+    .chunk-name {
+      font-size: 13px; font-weight: 500;
+      max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+
+    .scores {
+      display: flex; gap: 6px; align-items: center; margin-left: auto;
+    }
+    .score-pill {
+      display: flex; align-items: center; gap: 3px;
+      padding: 2px 8px;
+      background: var(--bg-input);
+      border-radius: 12px;
+      font-size: 10px; font-family: var(--mono);
+    }
+    .score-pill .label { color: var(--text-muted); }
+    .score-pill .val   { color: var(--text); font-weight: 600; }
+    .score-final { background: var(--accent-dim); }
+    .score-final .val { color: var(--accent); }
+
+    .card-body { position: relative; }
+    .code-block {
+      margin: 0;
+      padding: 14px 16px;
+      overflow-x: auto;
+      font-family: var(--mono);
+      font-size: 12.5px;
+      line-height: 1.65;
+      color: #c9d1d9;
+      background: #0d1117;
+      tab-size: 2;
+      white-space: pre;
+    }
+    .copy-btn {
+      position: absolute; top: 8px; right: 8px;
+      padding: 4px 8px; font-size: 11px;
+      background: var(--bg-hover);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--text-muted);
+      cursor: pointer;
+      opacity: 0;
+      transition: opacity 0.2s;
+    }
+    .card-body:hover .copy-btn { opacity: 1; }
+    .copy-btn:hover { color: var(--text); border-color: var(--accent); }
+
+    /* ──────────────────────────────────────────────────────────
+       Empty / error states
+    ────────────────────────────────────────────────────────── */
+    .empty-state {
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      padding: 60px 24px;
+      color: var(--text-muted);
+      text-align: center;
+      gap: 12px;
+    }
+    .empty-icon { font-size: 48px; opacity: 0.4; }
+    .empty-title { font-size: 16px; font-weight: 500; color: var(--text-dim); }
+    .empty-hint  { font-size: 13px; max-width: 360px; }
+
+    .error-box {
+      padding: 14px 16px;
+      background: rgba(239,68,68,0.1);
+      border: 1px solid rgba(239,68,68,0.3);
+      border-radius: var(--radius-sm);
+      color: #fca5a5;
+      font-size: 13px;
+    }
+
+    /* ──────────────────────────────────────────────────────────
+       Spinner
+    ────────────────────────────────────────────────────────── */
+    .spinner {
+      display: inline-block; width: 16px; height: 16px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ──────────────────────────────────────────────────────────
+       Project list
+    ────────────────────────────────────────────────────────── */
+    .project-item {
+      display: flex; align-items: center; gap: 8px;
+      padding: 8px 10px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      transition: background 0.15s;
+      font-size: 12px;
+    }
+    .project-item:hover { background: var(--bg-hover); }
+    .project-item.active { background: var(--accent-dim); }
+    .project-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
+    .project-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .project-size { color: var(--text-muted); font-family: var(--mono); }
+
+    /* ──────────────────────────────────────────────────────────
+       Index status panel
+    ────────────────────────────────────────────────────────── */
+    .index-result {
+      padding: 12px 16px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--text-dim);
+      display: none;
+    }
+    .index-result.visible { display: block; }
+    .index-stat { display: flex; justify-content: space-between; padding: 3px 0; }
+    .index-stat .k { color: var(--text-muted); }
+    .index-stat .v { color: var(--green); font-weight: 600; }
+
+    /* ──────────────────────────────────────────────────────────
+       Tabs
+    ────────────────────────────────────────────────────────── */
+    .tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); }
+    .tab {
+      padding: 8px 16px;
+      font-size: 13px; font-weight: 500;
+      color: var(--text-muted);
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -1px;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .tab:hover { color: var(--text); }
+    .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+    .tab-panel { display: none; padding: 20px 0; }
+    .tab-panel.active { display: flex; flex-direction: column; gap: 16px; }
+
+    /* ──────────────────────────────────────────────────────────
+       History
+    ────────────────────────────────────────────────────────── */
+    .history-item {
+      display: flex; align-items: center; gap: 8px;
+      padding: 6px 10px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      transition: background 0.15s;
+      font-size: 12px;
+    }
+    .history-item:hover { background: var(--bg-hover); }
+    .history-query { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-dim); }
+    .history-intent { font-size: 10px; }
+
+    /* ──────────────────────────────────────────────────────────
+       Responsive
+    ────────────────────────────────────────────────────────── */
+    @media (max-width: 768px) {
+      .app { grid-template-columns: 1fr; grid-template-areas: "header" "main"; }
+      .sidebar { display: none; }
+      .main { padding: 16px; }
+    }
+  </style>
+</head>
+<body>
+<div class="app" id="app">
+
+  <!-- ───── Header ───── -->
+  <header class="header">
+    <a class="logo" href="/">
+      <div class="logo-icon">🧠</div>
+      MyRAG
+    </a>
+    <div class="header-sep"></div>
+    <div class="stat-badge">
+      <span class="status-dot" id="statusDot"></span>
+      <span id="statusText">Connecting…</span>
+    </div>
+    <div class="stat-badge">
+      🗄 <span class="stat-value" id="rssValue">—</span> MB
+    </div>
+    <div class="stat-badge">
+      📁 <span class="stat-value" id="projectCount">—</span> projects
+    </div>
+  </header>
+
+  <!-- ───── Sidebar ───── -->
+  <aside class="sidebar">
+
+    <!-- Index section -->
+    <div class="sidebar-section">
+      <div class="sidebar-label">Index Project</div>
+      <label>Project path</label>
+      <input id="projectRoot" type="text" placeholder="D:\path\to\project" autocomplete="off" />
+      <div style="display:flex;gap:6px;margin-top:4px;">
+        <button class="btn btn-primary btn-full" id="indexBtn">⚡ Index</button>
+        <button class="btn btn-secondary btn-sm" id="forceIndexBtn" title="Force re-index all files">↺</button>
+      </div>
+      <div class="index-result" id="indexResult"></div>
+    </div>
+
+    <!-- Projects list -->
+    <div class="sidebar-section">
+      <div class="sidebar-label" style="display:flex;align-items:center;justify-content:space-between;">
+        Indexed Projects
+        <button class="btn btn-secondary btn-sm" id="refreshProjectsBtn" style="padding:2px 8px;font-size:11px;">↻</button>
+      </div>
+      <div id="projectsList">
+        <div class="empty-state" style="padding:20px;">
+          <div style="font-size:24px;">📂</div>
+          <div style="font-size:12px;color:var(--text-muted)">No projects indexed yet</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Query history -->
+    <div class="sidebar-section" style="flex:1;overflow:hidden;display:flex;flex-direction:column;">
+      <div class="sidebar-label">Recent Queries</div>
+      <div id="historyList" style="overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:2px;"></div>
+    </div>
+
+  </aside>
+
+  <!-- ───── Main ───── -->
+  <main class="main">
+
+    <!-- Tabs -->
+    <div class="tabs">
+      <div class="tab active" data-tab="search" id="tabSearch">🔍 Search</div>
+      <div class="tab" data-tab="ask" id="tabAsk">💬 Ask LLM</div>
+    </div>
+
+    <!-- Search tab -->
+    <div class="tab-panel active" id="panelSearch">
+      <div class="search-bar">
+        <textarea id="queryText" placeholder="Where is useAuth defined? | How does authentication work? | What breaks if I change ThemeContext?" rows="3"></textarea>
+        <div class="search-controls">
+          <div class="search-row">
+            <label style="margin:0">Top K</label>
+            <input type="number" id="topK" value="5" min="1" max="50" />
+          </div>
+          <button class="btn btn-primary" id="searchBtn">Search</button>
+        </div>
+      </div>
+
+      <!-- Intent display -->
+      <div class="intent-strip" id="intentStrip" style="display:none;">
+        <span style="color:var(--text-muted)">Intent:</span>
+        <span class="intent-badge" id="intentBadge">—</span>
+        <span style="color:var(--text-muted)">Confidence:</span>
+        <div class="conf-bar"><div class="conf-fill" id="confFill" style="width:0%"></div></div>
+        <span id="confVal" style="font-family:var(--mono);font-size:11px;">0%</span>
+      </div>
+
+      <!-- Results -->
+      <div id="searchResults">
+        <div class="empty-state">
+          <div class="empty-icon">🔍</div>
+          <div class="empty-title">Search your codebase</div>
+          <div class="empty-hint">Index a project, then ask a question in natural language. Hybrid retrieval combines keyword search, semantic similarity, and dependency graph traversal.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Ask tab -->
+    <div class="tab-panel" id="panelAsk">
+      <div class="search-bar">
+        <textarea id="askQueryText" placeholder="How does authentication work? Where should I add a global error handler?" rows="3"></textarea>
+        <div class="search-controls">
+          <div class="search-row">
+            <label style="margin:0">Top K</label>
+            <input type="number" id="askTopK" value="5" min="1" max="50" />
+          </div>
+          <button class="btn btn-primary" id="askBtn">Ask LLM</button>
+        </div>
+      </div>
+      <div id="askResults">
+        <div class="empty-state">
+          <div class="empty-icon">💬</div>
+          <div class="empty-title">Ask the LLM</div>
+          <div class="empty-hint">Requires a configured LLM provider (Ollama, llama.cpp, or OpenAI). Set LLM_PROVIDER in your .env file.</div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<script>
+  /* ──────────────────────────────────────────────────────────────────────
+     State
+  ────────────────────────────────────────────────────────────────────── */
+  const state = {
+    projectRoot: '',
+    history: JSON.parse(localStorage.getItem('myrag_history') || '[]'),
+  };
+
+  /* ──────────────────────────────────────────────────────────────────────
+     Utilities
+  ────────────────────────────────────────────────────────────────────── */
+  const $ = id => document.getElementById(id);
+
+  function escHtml(s) {
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function fmtScore(n) { return n.toFixed(3); }
+
+  function getTypeClass(t) {
+    const map = {COMPONENT:'type-COMPONENT', HOOK:'type-HOOK', FUNCTION:'type-FUNCTION',
+      IMPORT_BLOCK:'type-IMPORT_BLOCK', ROUTE:'type-ROUTE', STORE:'type-STORE'};
+    return map[t] || 'type-MISC';
+  }
+
+  function fileExt(path) {
+    const m = path.match(/\.(\w+)$/);
+    return m ? m[1] : 'js';
+  }
+
+  function syntaxHL(code, ext) {
+    // Lightweight syntax highlight via CSS class names only
+    return escHtml(code)
+      .replace(/(\/\/[^\n]*)/g, '<span style="color:#6a9955">$1</span>')
+      .replace(/\b(const|let|var|function|return|import|export|from|default|async|await|if|else|for|while|class|extends|new|typeof|void|null|undefined|true|false)\b/g,
+        '<span style="color:#569cd6">$1</span>')
+      .replace(/("[^"\\]*(?:\\.[^"\\]*)*"|'[^'\\]*(?:\\.[^'\\]*)*'|`[^`\\]*(?:\\.[^`\\]*)*`)/g,
+        '<span style="color:#ce9178">$1</span>')
+      .replace(/\b(use[A-Z]\w+)\b/g, '<span style="color:#dcdcaa">$1</span>');
+  }
+
+  /* ──────────────────────────────────────────────────────────────────────
+     API calls
+  ────────────────────────────────────────────────────────────────────── */
+  async function apiGet(url) {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+
+  async function apiPost(url, body) {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      throw new Error(txt);
+    }
+    return res.json();
+  }
+
+  /* ──────────────────────────────────────────────────────────────────────
+     Health + stats polling
+  ────────────────────────────────────────────────────────────────────── */
+  async function pollHealth() {
+    try {
+      const h = await apiGet('/health');
+      $('statusDot').className = 'status-dot ok';
+      $('statusText').textContent = `API v${h.version}`;
+      const s = await apiGet('/stats');
+      $('rssValue').textContent = s.rss_mb.toFixed(1);
+      $('projectCount').textContent = s.projects;
+    } catch {
+      $('statusDot').className = 'status-dot err';
+      $('statusText').textContent = 'Offline';
+    }
+  }
+
+  /* ──────────────────────────────────────────────────────────────────────
+     Projects list
+  ────────────────────────────────────────────────────────────────────── */
+  async function loadProjects() {
+    try {
+      const projects = await apiGet('/projects');
+      const list = $('projectsList');
+      if (!projects.length) {
+        list.innerHTML = `<div class="empty-state" style="padding:20px;">
+          <div style="font-size:24px;">📂</div>
+          <div style="font-size:12px;color:var(--text-muted)">No projects yet</div>
+        </div>`;
+        return;
+      }
+      list.innerHTML = projects.map(p => {
+        const name = p.db_path.split(/[\\/]/).pop().replace('.db', '');
+        const kb = Math.round(p.size_bytes / 1024);
+        const active = state.projectRoot && name === state.activeProjectName ? 'active' : '';
+        return `<div class="project-item ${active}" data-pid="${escHtml(p.project_id)}" onclick="selectProject('${escHtml(p.project_id)}')">
+          <div class="project-dot"></div>
+          <div class="project-name" title="${escHtml(p.db_path)}">${escHtml(name)}</div>
+          <div class="project-size">${kb} KB</div>
+        </div>`;
+      }).join('');
+    } catch (e) {
+      console.warn('loadProjects failed', e);
+    }
+  }
+
+  function selectProject(pid) {
+    // Allow clicking a project to pre-fill path from meta (best effort)
+    fetch(`/project/meta?project_root=${encodeURIComponent(state.projectRoot)}`)
+      .catch(() => {});
+  }
+
+  /* ──────────────────────────────────────────────────────────────────────
+     Indexing
+  ────────────────────────────────────────────────────────────────────── */
+  async function doIndex(force = false) {
+    const root = $('projectRoot').value.trim();
+    if (!root) { alert('Enter a project path first.'); return; }
+    state.projectRoot = root;
+
+    const btn = $('indexBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Indexing…';
+    $('indexResult').className = 'index-result';
+
+    try {
+      const res = await apiPost('/index', {project_root: root, force_reindex: force});
+      const s = res.stats;
+      $('indexResult').innerHTML = `
+        <div class="index-stat"><span class="k">Status</span><span class="v">✓ Indexed</span></div>
+        <div class="index-stat"><span class="k">Files scanned</span><span class="v">${s.files_scanned}</span></div>
+        <div class="index-stat"><span class="k">Files indexed</span><span class="v">${s.files_indexed}</span></div>
+        <div class="index-stat"><span class="k">Chunks stored</span><span class="v">${s.chunks_indexed}</span></div>
+        <div class="index-stat"><span class="k">Time</span><span class="v">${s.elapsed_ms} ms</span></div>
+      `;
+      $('indexResult').className = 'index-result visible';
+      await loadProjects();
+      await pollHealth();
+    } catch (e) {
+      $('indexResult').innerHTML = `<div class="error-box">⚠ ${escHtml(String(e))}</div>`;
+      $('indexResult').className = 'index-result visible';
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = '⚡ Index';
+    }
+  }
+
+  /* ──────────────────────────────────────────────────────────────────────
+     History
+  ────────────────────────────────────────────────────────────────────── */
+  function saveHistory(query, intent) {
+    state.history.unshift({query, intent, ts: Date.now()});
+    if (state.history.length > 20) state.history = state.history.slice(0, 20);
+    localStorage.setItem('myrag_history', JSON.stringify(state.history));
+    renderHistory();
+  }
+
+  function renderHistory() {
+    const list = $('historyList');
+    if (!state.history.length) {
+      list.innerHTML = `<div style="font-size:12px;color:var(--text-muted);padding:8px 4px;">No recent queries</div>`;
+      return;
+    }
+    list.innerHTML = state.history.map(h => `
+      <div class="history-item" onclick="replayQuery(${JSON.stringify(escHtml(h.query))})">
+        <span class="intent-badge history-intent intent-${h.intent || 'architecture'}">${(h.intent || '?').replace(/_/g,' ')}</span>
+        <span class="history-query">${escHtml(h.query)}</span>
+      </div>
+    `).join('');
+  }
+
+  function replayQuery(q) {
+    $('queryText').value = q;
+    doSearch();
+  }
+
+  /* ──────────────────────────────────────────────────────────────────────
+     Render results
+  ────────────────────────────────────────────────────────────────────── */
+  function renderResults(container, data) {
+    const { query, intent, confidence, results, elapsed_ms } = data;
+
+    // Intent strip
+    $('intentStrip').style.display = 'flex';
+    const ib = $('intentBadge');
+    ib.textContent = (intent || '').replace(/_/g, ' ');
+    ib.className = `intent-badge intent-${intent}`;
+    const conf = Math.round((confidence || 0) * 100);
+    $('confFill').style.width = `${conf}%`;
+    $('confVal').textContent = `${conf}%`;
+
+    if (!results.length) {
+      container.innerHTML = `<div class="empty-state">
+        <div class="empty-icon">🔎</div>
+        <div class="empty-title">No results found</div>
+        <div class="empty-hint">Try a broader query or index more files.</div>
+      </div>`;
+      return;
+    }
+
+    const header = `<div class="results-header">
+      <span class="results-count">${results.length} result${results.length !== 1 ? 's' : ''}</span>
+      <span>for <em style="color:var(--text)">"${escHtml(query)}"</em></span>
+      <span class="elapsed">⏱ ${elapsed_ms} ms</span>
+    </div>`;
+
+    const cards = results.map((r, i) => {
+      const ext = fileExt(r.file_path);
+      const codeHL = syntaxHL(r.text, ext);
+      return `
+      <div class="result-card" style="animation-delay:${i * 40}ms">
+        <div class="card-header">
+          <div class="rank-num">${i + 1}</div>
+          <div class="file-path">${escHtml(r.file_path)}<span class="line-range">:${r.start_line}–${r.end_line}</span></div>
+          <span class="chunk-type-badge ${getTypeClass(r.chunk_type)}">${r.chunk_type}</span>
+          ${r.name ? `<span class="chunk-name" title="${escHtml(r.name)}">${escHtml(r.name)}</span>` : ''}
+          <div class="scores">
+            <div class="score-pill score-final"><span class="label">final</span><span class="val">${fmtScore(r.final_score)}</span></div>
+            <div class="score-pill"><span class="label">lex</span><span class="val">${fmtScore(r.lexical_score)}</span></div>
+            <div class="score-pill"><span class="label">sem</span><span class="val">${fmtScore(r.semantic_score)}</span></div>
+            <div class="score-pill"><span class="label">grph</span><span class="val">${fmtScore(r.graph_score)}</span></div>
+          </div>
+        </div>
+        <div class="card-body">
+          <pre class="code-block"><code>${codeHL}</code></pre>
+          <button class="copy-btn" onclick="copyCode(this, ${JSON.stringify(r.text)})">Copy</button>
+        </div>
+      </div>`;
+    }).join('');
+
+    container.innerHTML = header + cards;
+  }
+
+  function copyCode(btn, text) {
+    navigator.clipboard.writeText(text).then(() => {
+      btn.textContent = 'Copied!';
+      setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+    });
+  }
+
+  /* ──────────────────────────────────────────────────────────────────────
+     Search
+  ────────────────────────────────────────────────────────────────────── */
+  async function doSearch() {
+    const root = $('projectRoot').value.trim() || state.projectRoot;
+    const query = $('queryText').value.trim();
+    const top_k = parseInt($('topK').value) || 5;
+
+    if (!root) { alert('Set a project path in the sidebar first.'); return; }
+    if (!query) return;
+    state.projectRoot = root;
+
+    const btn = $('searchBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>';
+    $('searchResults').innerHTML = `<div class="empty-state"><div class="spinner" style="width:32px;height:32px;border-width:3px;"></div></div>`;
+    $('intentStrip').style.display = 'none';
+
+    try {
+      const data = await apiPost('/query', {project_root: root, query, top_k});
+      renderResults($('searchResults'), data);
+      saveHistory(query, data.intent);
+    } catch (e) {
+      $('searchResults').innerHTML = `<div class="error-box">⚠ ${escHtml(String(e))}</div>`;
+      $('intentStrip').style.display = 'none';
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = 'Search';
+    }
+  }
+
+  /* ──────────────────────────────────────────────────────────────────────
+     Ask LLM
+  ────────────────────────────────────────────────────────────────────── */
+  async function doAsk() {
+    const root = $('projectRoot').value.trim() || state.projectRoot;
+    const query = $('askQueryText').value.trim();
+    const top_k = parseInt($('askTopK').value) || 5;
+
+    if (!root) { alert('Set a project path in the sidebar first.'); return; }
+    if (!query) return;
+
+    const btn = $('askBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Thinking…';
+    $('askResults').innerHTML = `<div class="empty-state"><div class="spinner" style="width:32px;height:32px;border-width:3px;"></div></div>`;
+
+    try {
+      const data = await apiPost('/ask', {project_root: root, query, top_k, stream: false});
+      const answerHtml = `
+        <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:20px;margin-bottom:16px;">
+          <div style="font-size:12px;color:var(--text-muted);margin-bottom:10px;">LLM Answer</div>
+          <div style="font-size:14px;line-height:1.8;white-space:pre-wrap;">${escHtml(data.answer)}</div>
+        </div>`;
+      const fakeData = {query, intent: 'architecture', confidence: 1, results: data.results, elapsed_ms: 0};
+      const tempDiv = document.createElement('div');
+      renderResults(tempDiv, fakeData);
+      $('askResults').innerHTML = answerHtml + tempDiv.innerHTML;
+    } catch (e) {
+      const msg = String(e);
+      if (msg.includes('none')) {
+        $('askResults').innerHTML = `<div class="error-box">⚠ LLM provider is set to "none". Set LLM_PROVIDER in your .env file (ollama | llamacpp | openai).</div>`;
+      } else {
+        $('askResults').innerHTML = `<div class="error-box">⚠ ${escHtml(msg)}</div>`;
+      }
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = 'Ask LLM';
+    }
+  }
+
+  /* ──────────────────────────────────────────────────────────────────────
+     Tabs
+  ────────────────────────────────────────────────────────────────────── */
+  document.querySelectorAll('.tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+      tab.classList.add('active');
+      document.getElementById(`panel${tab.dataset.tab.charAt(0).toUpperCase() + tab.dataset.tab.slice(1)}`).classList.add('active');
+    });
+  });
+
+  /* ──────────────────────────────────────────────────────────────────────
+     Keyboard shortcuts
+  ────────────────────────────────────────────────────────────────────── */
+  $('queryText').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); doSearch(); }
+  });
+  $('askQueryText').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); doAsk(); }
+  });
+
+  /* ──────────────────────────────────────────────────────────────────────
+     Event listeners
+  ────────────────────────────────────────────────────────────────────── */
+  $('indexBtn').addEventListener('click', () => doIndex(false));
+  $('forceIndexBtn').addEventListener('click', () => doIndex(true));
+  $('searchBtn').addEventListener('click', doSearch);
+  $('askBtn').addEventListener('click', doAsk);
+  $('refreshProjectsBtn').addEventListener('click', loadProjects);
+
+  /* ──────────────────────────────────────────────────────────────────────
+     Init
+  ────────────────────────────────────────────────────────────────────── */
+  (async () => {
+    renderHistory();
+    await pollHealth();
+    await loadProjects();
+    setInterval(pollHealth, 15000);
+  })();
+</script>
+</body>
+</html>

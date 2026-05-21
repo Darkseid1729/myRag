@@ -1,0 +1,99 @@
+{
+  "name": "myrag",
+  "displayName": "MyRAG — Local Code Intelligence",
+  "description": "AI-powered code search for Vite + React projects using local RAG with hybrid retrieval",
+  "version": "1.0.0",
+  "publisher": "local",
+  "icon": "icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/local/myrag"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": ["Other", "Programming Languages"],
+  "keywords": ["rag", "code intelligence", "search", "react", "vite", "local ai"],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "myrag.search",
+        "title": "MyRAG: Search Codebase",
+        "category": "MyRAG"
+      },
+      {
+        "command": "myrag.index",
+        "title": "MyRAG: Index Project",
+        "category": "MyRAG"
+      },
+      {
+        "command": "myrag.openUI",
+        "title": "MyRAG: Open Web UI",
+        "category": "MyRAG"
+      },
+      {
+        "command": "myrag.querySelection",
+        "title": "MyRAG: Search Selected Text",
+        "category": "MyRAG"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "when": "editorHasSelection && resourceExtname =~ /\\.(js|jsx|ts|tsx)$/",
+          "command": "myrag.querySelection",
+          "group": "navigation@10"
+        }
+      ],
+      "commandPalette": [
+        { "command": "myrag.search" },
+        { "command": "myrag.index" },
+        { "command": "myrag.openUI" },
+        { "command": "myrag.querySelection", "when": "editorHasSelection" }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "myrag.search",
+        "key": "ctrl+shift+m",
+        "mac": "cmd+shift+m"
+      },
+      {
+        "command": "myrag.querySelection",
+        "key": "ctrl+shift+q",
+        "mac": "cmd+shift+q",
+        "when": "editorHasSelection"
+      }
+    ],
+    "configuration": {
+      "title": "MyRAG",
+      "properties": {
+        "myrag.apiUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:8000",
+          "description": "URL of the running MyRAG server"
+        },
+        "myrag.autoIndex": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically re-index the project on every file save"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "@types/vscode": "^1.90.0",
+    "@types/node": "^20.0.0",
+    "@vscode/vsce": "^3.0.0"
+  }
+}

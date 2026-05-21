@@ -1,4 +1,12 @@
-"""SQLite database manager with strict memory controls and migration runner."""
+"""SQLite database manager with strict memory controls and migration runner.
+
+Design decisions:
+- One SQLite file per indexed project (no shared global DB).
+- WAL mode for concurrent reads without write blocking.
+- FTS5 virtual table for BM25 lexical search.
+- int8-quantized embedding BLOBs for memory efficiency.
+- Unique constraint on graph_edges to prevent duplicate edges.
+"""
 
 from __future__ import annotations
 
@@ -11,12 +19,15 @@ from src.utils import get_logger
 
 logger = get_logger(__name__)
 
-# SQL for all 11 tables --------------------------------------------------
+# ---------------------------------------------------------------------------
+# Full schema — 11 tables + indices
+# ---------------------------------------------------------------------------
 
-_SCHEMA_SQL = """
+_SCHEMA_SQL = """\
 PRAGMA journal_mode=WAL;
 PRAGMA synchronous=NORMAL;
 PRAGMA temp_store=MEMORY;
+PRAGMA foreign_keys=ON;
 
 CREATE TABLE IF NOT EXISTS files (
     id           TEXT PRIMARY KEY,
@@ -87,6 +98,8 @@ CREATE INDEX IF NOT EXISTS idx_edges_from      ON graph_edges(from_id);
 CREATE INDEX IF NOT EXISTS idx_edges_to        ON graph_edges(to_id);
 CREATE INDEX IF NOT EXISTS idx_edges_type      ON graph_edges(edge_type);
 CREATE INDEX IF NOT EXISTS idx_edges_from_type ON graph_edges(from_id, edge_type);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_edges_unique
+    ON graph_edges(from_id, to_id, edge_type);
 
 CREATE TABLE IF NOT EXISTS routes (
     id           TEXT PRIMARY KEY,
@@ -102,7 +115,7 @@ CREATE INDEX IF NOT EXISTS idx_routes_component ON routes(component);
 
 CREATE TABLE IF NOT EXISTS api_calls (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    chunk_id    TEXT NOT NULL REFERENCES chunks(id),
+    chunk_id    TEXT NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
     method      TEXT,
     endpoint    TEXT,
     client_type TEXT,
@@ -134,6 +147,18 @@ CREATE TABLE IF NOT EXISTS indexing_metadata (
 );
 """
 
+# ---------------------------------------------------------------------------
+# Migration helpers (applied on schema version mismatch)
+# ---------------------------------------------------------------------------
+
+_MIGRATIONS: list[str] = [
+    # v1 → v2: Add unique index on graph_edges if not exists
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_edges_unique
+        ON graph_edges(from_id, to_id, edge_type);
+    """,
+]
+
 
 class DBManager:
     """Manages a single SQLite database for one indexed project."""
@@ -151,9 +176,6 @@ class DBManager:
     def connect(self) -> None:
         self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
-
-        # Strict memory cap on SQLite page cache
-        pages = (self.page_cache_kb * 1024) // 4096
         self._conn.execute(f"PRAGMA cache_size = -{self.page_cache_kb};")
         self._conn.execute("PRAGMA foreign_keys = ON;")
         self._init_schema()
@@ -178,6 +200,12 @@ class DBManager:
     def _init_schema(self) -> None:
         assert self._conn
         self._conn.executescript(_SCHEMA_SQL)
+        # Run any pending migrations
+        for migration in _MIGRATIONS:
+            try:
+                self._conn.executescript(migration)
+            except Exception:
+                pass  # Idempotent — index may already exist
         self._conn.commit()
 
     # ------------------------------------------------------------------
@@ -220,13 +248,37 @@ class DBManager:
         return row["value"] if row else None
 
     # ------------------------------------------------------------------
+    # FTS5 helpers
+    # ------------------------------------------------------------------
+
+    def delete_fts_for_chunks(self, chunk_ids: list[str]) -> None:
+        """Remove FTS5 rows for a set of chunk IDs.
+
+        FTS5 virtual tables don't support FK cascades so we must delete
+        manually.
+        """
+        if not chunk_ids:
+            return
+        ph = ",".join("?" * len(chunk_ids))
+        self.conn.execute(
+            f"DELETE FROM fts_chunks WHERE chunk_id IN ({ph})",
+            tuple(chunk_ids),
+        )
+
+    # ------------------------------------------------------------------
     # Cache helpers
     # ------------------------------------------------------------------
 
     def evict_expired_cache(self) -> int:
+        """Delete expired retrieval cache entries.  Returns deleted row count."""
         now = int(time.time())
         cur = self.conn.execute(
             "DELETE FROM retrieval_cache WHERE created_at + ttl_seconds < ?", (now,)
         )
         self.conn.commit()
         return cur.rowcount
+
+    def invalidate_cache(self) -> None:
+        """Wipe all cache entries (call after re-indexing)."""
+        self.conn.execute("DELETE FROM retrieval_cache")
+        self.conn.commit()

@@ -54,10 +54,13 @@ class RoutingDecision:
 _INTENT_RULES: dict[Intent, list[str]] = {
     Intent.SYMBOL_LOOKUP: [
         r"\bwhere is\b",
-        r"\bfind\b.{0,30}\b(function|component|hook|file|class)\b",
+        r"\bfind\b.{0,50}\b(function|component|hook|file|class|places|all)\b",
         r"\bshow me\b.{0,30}\b(definition|code|impl)\b",
         r"\bwhere (is|are|does)\b.{0,30}\bdefined\b",
         r"\blocate\b",
+        r"\ball places\b",
+        r"\ball (files|components|uses)\b",
+        r"\busing\b.{0,20}\b[a-z][a-zA-Z]{3,}\b",  # "using useTheme"
     ],
     Intent.ARCHITECTURE: [
         r"\bhow does\b",
@@ -73,15 +76,23 @@ _INTENT_RULES: dict[Intent, list[str]] = {
         r"\bwhere (to|would I).{0,20}\badd\b",
         r"\bimplement\b",
         r"\bintegrate\b",
-        r"\badd\b.{0,20}\bfeature\b",
+        r"\badd\b.{0,30}\b(feature|component|page|button|calendar|logout|login)\b",
+        r"\bcreate\b.{0,20}\b(feature|component|page)\b",
     ],
     Intent.DEBUGGING: [
-        r"\bwhy (is|does|did)\b.{0,30}\b(not|fail|broken|error)\b",
+        r"\bwhy (is|does|did|might|would|could)\b.{0,40}\b(not|fail|broken|error|missing|wrong|never)\b",
         r"\bwhat.{0,10}wrong\b",
         r"\bdebug\b",
         r"\bissue\b",
         r"\bfix\b",
         r"\bbug\b",
+        r"\bnot (get|being|work|show|fire|trigger|mark|run)\b",
+        r"\bfail(s|ed|ing)?\b",
+        r"\bnever (fires?|runs?|works?|triggers?|marks?)\b",
+        r"\bwhy might\b",
+        r"\bnot getting\b",
+        r"\bwon't\b",
+        r"\bdoesn't\b.{0,20}\b(work|fire|run|trigger)\b",
     ],
     Intent.RERENDER_ANALYSIS: [
         r"\brerender\b",
@@ -96,7 +107,8 @@ _INTENT_RULES: dict[Intent, list[str]] = {
         r"\b\/[a-z\-\/]+\b",
         r"\bpage\b.{0,20}\bflow\b",
         r"\bnavigat\b",
-        r"\bwhich files.{0,20}route\b",
+        r"\bwhich files.{0,20}(route|affect)\b",
+        r"\bfiles affect\b",
     ],
     Intent.IMPACT_ANALYSIS: [
         r"\bwhat (breaks|changes)\b",
@@ -150,12 +162,28 @@ _STRATEGY_MAP: dict[Intent, RetrievalStrategy] = {
 
 # Query expansion dictionary
 _QUERY_EXPANSIONS: dict[str, list[str]] = {
-    "auth": ["authentication", "login", "token", "JWT", "session", "credentials"],
-    "theme": ["dark mode", "light mode", "colors", "palette", "useTheme", "ThemeProvider"],
+    "auth": ["authentication", "login", "token", "JWT", "session", "credentials", "LoginSwitcher"],
+    "theme": ["useTheme", "ThemeProvider", "darkmode", "lightmode", "palette", "colors"],
     "state": ["useState", "useReducer", "store", "Redux", "Zustand", "atoms"],
     "routing": ["Route", "useNavigate", "useLocation", "Link", "history", "path"],
     "fetch": ["API", "axios", "useQuery", "fetch", "REST", "HTTP", "endpoint"],
-    "render": ["JSX", "return", "component", "DOM", "virtual DOM", "React.createElement"],
+    "render": ["JSX", "return", "component", "DOM", "React"],
+    "logout": ["signout", "deauthenticate", "logout", "session", "clearToken"],
+    "login": ["signin", "authenticate", "LoginSwitcher", "credentials"],
+    "sidebar": ["Sidebar", "nav", "navigation", "drawer"],
+    "calendar": ["Calendar", "schedule", "date", "DatePicker"],
+    "dashboard": ["Dashboard", "DashboardContent", "TeacherDashboard"],
+}
+
+# Keyword-level confidence boosters per intent
+_CONFIDENCE_KEYWORDS: dict[Intent, list[str]] = {
+    Intent.SYMBOL_LOOKUP: ["find", "where", "locate", "show", "all places", "using", "which"],
+    Intent.ARCHITECTURE: ["how", "explain", "flow", "architecture", "overview"],
+    Intent.MODIFICATION_GUIDANCE: ["add", "implement", "create", "integrate", "build"],
+    Intent.DEBUGGING: ["why", "broken", "fail", "debug", "fix", "issue", "not get", "not mark", "never", "doesn't", "won't", "missing"],
+    Intent.RERENDER_ANALYSIS: ["rerender", "render", "performance", "memo"],
+    Intent.ROUTE_TRACING: ["route", "files affect", "page", "navigate", "which files"],
+    Intent.IMPACT_ANALYSIS: ["impact", "affect", "depends", "breaks", "change"],
 }
 
 
@@ -175,20 +203,40 @@ def _classify_by_rules(query: str) -> Optional[Intent]:
 
 
 def _expand_query(query: str) -> str:
+    """Expand query with synonyms and camelCase identifier variants."""
     tokens = query.lower().split()
     expansions: list[str] = []
     for token in tokens:
         if token in _QUERY_EXPANSIONS:
             expansions.extend(_QUERY_EXPANSIONS[token])
+    # Also extract camelCase identifiers from the original query and add their splits
+    identifiers = re.findall(r"\b[a-z][a-zA-Z0-9]+[A-Z][a-zA-Z0-9]*\b|\b[A-Z][a-zA-Z0-9]+\b", query)
+    for ident in identifiers:
+        # Add both the identifier and its camelCase-split parts
+        parts = re.sub(r"([a-z])([A-Z])", r"\1 \2", ident).lower()
+        if parts != ident.lower():
+            expansions.append(parts)
     if expansions:
-        return query + " " + " ".join(set(expansions))
+        return query + " " + " ".join(dict.fromkeys(expansions))  # deduplicated
     return query
 
 
 def _compute_confidence(intent: Intent, query: str) -> float:
+    """Compute confidence using pattern matches + keyword boosting."""
     patterns = _COMPILED_RULES[intent]
     matched = sum(1 for p in patterns if p.search(query))
-    return min(1.0, matched / max(1, len(patterns)))
+    # Base confidence from pattern ratio
+    base = matched / max(1, len(patterns))
+
+    # Keyword boost: check for high-signal words
+    kw_list = _CONFIDENCE_KEYWORDS.get(intent, [])
+    kw_matches = sum(1 for kw in kw_list if kw.lower() in query.lower())
+    kw_boost = min(0.4, kw_matches * 0.15)
+
+    # Pattern match absolute boost: each match adds 0.2
+    pattern_boost = min(0.4, matched * 0.2)
+
+    return min(1.0, base + kw_boost + pattern_boost)
 
 
 # ---------------------------------------------------------------------------

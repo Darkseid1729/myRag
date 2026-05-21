@@ -46,11 +46,60 @@ def _node_text(node: Any, src: bytes) -> str:
     return src[node.start_byte:node.end_byte].decode(errors="replace")
 
 
+# Keywords that should never be treated as meaningful symbols
+_NOISE_KEYWORDS = frozenset({
+    "import", "export", "default", "from", "as", "const", "let", "var",
+    "function", "return", "class", "extends", "new", "this", "super",
+    "if", "else", "for", "while", "do", "switch", "case", "break",
+    "async", "await", "try", "catch", "finally", "throw",
+    "true", "false", "null", "undefined",
+    "React", "props", "children", "state",
+})
+_MIN_SYMBOL_LEN = 3
+
+# Patterns for rich symbol extraction (module-level, always available)
+_HOOK_CALL_PAT = re.compile(r"\b(use[A-Z][a-zA-Z0-9]+)\b")
+_JSX_COMP_PAT  = re.compile(r"<([A-Z][a-zA-Z0-9_]*)\b")
+
+
+def _rich_symbols(name: str | None, raw: str) -> list[str]:
+    """Extract all meaningful identifiers from a chunk as symbols.
+
+    Includes: the chunk's own name, all custom hook calls (useXxx),
+    all PascalCase JSX component references, and camelCase identifiers
+    longer than 4 chars that are called as functions.
+    Filters out noise keywords and very short tokens.
+    """
+    seen: dict[str, None] = {}  # ordered set
+
+    def _add(token: str) -> None:
+        if token and len(token) >= _MIN_SYMBOL_LEN and token not in _NOISE_KEYWORDS:
+            seen[token] = None
+
+    if name:
+        _add(name)
+
+    # All hook calls (useXxx)
+    for m in _HOOK_CALL_PAT.finditer(raw):
+        _add(m.group(1))
+
+    # All JSX component tags (<ComponentName)
+    for m in _JSX_COMP_PAT.finditer(raw):
+        _add(m.group(1))
+
+    # Function-call-like camelCase identifiers (myFunc(  or  myFunc.)
+    for m in re.finditer(r"\b([a-z][a-zA-Z]{3,})\s*[\.\(]", raw):
+        token = m.group(1)
+        if any(c.isupper() for c in token[1:]):  # must have at least one uppercase
+            _add(token)
+
+    return list(seen.keys())
+
+
 def _extract_ts(src: bytes) -> list[ParsedChunk]:
     tree = _PARSER.parse(src)
     chunks: list[ParsedChunk] = []
     text = src.decode(errors="replace")
-    lines = text.splitlines()
 
     def _lineno(byte_offset: int) -> int:
         return text[:byte_offset].count("\n") + 1
@@ -62,12 +111,10 @@ def _extract_ts(src: bytes) -> list[ParsedChunk]:
         if kind in ("function_declaration", "function_expression",
                      "arrow_function", "lexical_declaration"):
             raw = _node_text(node, src)
-            # detect hook (useXxx pattern)
             name_match = re.search(r"(?:function\s+|const\s+)(\w+)", raw)
             name = name_match.group(1) if name_match else None
             chunk_type = "HOOK" if (name and name.startswith("use")) else "FUNCTION"
 
-            # Is it a React component (PascalCase + JSX return)?
             if name and name[0].isupper() and "<" in raw:
                 chunk_type = "COMPONENT"
 
@@ -77,19 +124,25 @@ def _extract_ts(src: bytes) -> list[ParsedChunk]:
                 text=raw,
                 start_line=_lineno(node.start_byte),
                 end_line=_lineno(node.end_byte),
-                symbols=[name] if name else [],
+                symbols=_rich_symbols(name, raw),
             ))
-            return  # don't recurse into this subtree
+            return
 
-        # Import declarations → single IMPORT_BLOCK chunk
-        if kind == "import_declaration":
+        # Import declarations
+        if kind in ("import_declaration", "import_statement"):
             raw = _node_text(node, src)
+            # Extract meaningful imported identifiers (filter noise keywords)
+            imported = [
+                t for t in re.findall(r"\b([A-Za-z_$][a-zA-Z0-9_$]+)\b", raw)
+                if t not in _NOISE_KEYWORDS and len(t) >= _MIN_SYMBOL_LEN
+            ]
             chunks.append(ParsedChunk(
                 chunk_type="IMPORT_BLOCK",
                 name=None,
                 text=raw,
                 start_line=_lineno(node.start_byte),
                 end_line=_lineno(node.end_byte),
+                symbols=list(dict.fromkeys(imported)),
             ))
             return
 
@@ -124,7 +177,6 @@ def _extract_regex(source: str) -> list[ParsedChunk]:
         start_char = m.start()
         start_line = source[:start_char].count("\n") + 1
 
-        # Approximate end: next top-level function or end of file
         end_line = min(start_line + 60, len(lines))
         text = "\n".join(lines[start_line - 1 : end_line])
 
@@ -137,18 +189,21 @@ def _extract_regex(source: str) -> list[ParsedChunk]:
             text=text,
             start_line=start_line,
             end_line=end_line,
-            symbols=[name],
+            symbols=_rich_symbols(name, text),
         ))
 
     # Collect contiguous import lines
     import_lines = [i + 1 for i, l in enumerate(lines) if l.strip().startswith("import ")]
     if import_lines:
+        import_text = "\n".join(lines[import_lines[0] - 1 : import_lines[-1]])
+        imported = re.findall(r"\b([A-Za-z_$][a-zA-Z0-9_$]+)\b", import_text)
         chunks.append(ParsedChunk(
             chunk_type="IMPORT_BLOCK",
             name=None,
-            text="\n".join(lines[import_lines[0] - 1 : import_lines[-1]]),
+            text=import_text,
             start_line=import_lines[0],
             end_line=import_lines[-1],
+            symbols=list(dict.fromkeys(imported)),
         ))
 
     return chunks

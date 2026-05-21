@@ -27,11 +27,22 @@ retrieval:
   fts_candidate_pool: 50       # pull top-50 via FTS then rerank
   max_graph_depth: 4
   cache_ttl_seconds: 3600
+  use_reranker: false          # optional cross-encoder reranker
+  reranker_model: "cross-encoder/ms-marco-MiniLM-L-6-v2"
+  reranker_top_k: 10
 
 llm:
   provider: "none"             # none | ollama | llamacpp | openai
   max_context_tokens: 4096
   temperature: 0.2
+  ollama_base_url: "http://localhost:11434"
+  ollama_model: "llama3"
+  llamacpp_base_url: "http://localhost:8080"
+  openai_model: "gpt-4o-mini"
+  stream: true
+
+plugins:
+  enabled: []
 
 logging:
   level: "INFO"

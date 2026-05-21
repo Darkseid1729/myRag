@@ -107,6 +107,9 @@ class ONNXEncoder:
         model_file = self._model_dir / "model.onnx"
         if model_file.exists():
             return
+        # If the model already exists in a nested folder, skip re-downloads.
+        if list(self._model_dir.glob("**/*.onnx")):
+            return
 
         logger.info("Downloading embedding model (first run)…")
         self._model_dir.mkdir(parents=True, exist_ok=True)
@@ -140,10 +143,17 @@ class ONNXEncoder:
 
         onnx_candidates = list(self._model_dir.glob("*.onnx"))
         if not onnx_candidates:
+            # Some HF snapshots keep ONNX files in nested folders (e.g., onnx/model.onnx).
+            onnx_candidates = list(self._model_dir.glob("**/*.onnx"))
+        if not onnx_candidates:
             raise FileNotFoundError(f"No .onnx file found in {self._model_dir}")
 
+        # Prefer a canonical model.onnx when present for predictable behavior.
+        preferred = [p for p in onnx_candidates if p.name == "model.onnx"]
+        chosen = preferred[0] if preferred else sorted(onnx_candidates)[0]
+
         self._session = ort.InferenceSession(
-            str(onnx_candidates[0]),
+            str(chosen),
             sess_options=opts,
             providers=["CPUExecutionProvider"],
         )
